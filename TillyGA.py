@@ -3,59 +3,65 @@ import random
 import math
 import sys
 import operator
+import multiprocessing as mp
+from functools import partial
 
 FOUNTAIN_SIZE = 12 * 12
-MAX_GENERATIONS = 1000
+MAX_GENERATIONS = 500
+
 POPULATION_SIZE = 1000
-MUTATION_RATE = 70
+MUTATION_RATE = 49
 # states will be (center, up, down, left, right)
 STATES = []
 
 
-
 def main():
-
-    # pre compute possible situations that tilly can be in
-    generate_states()
-    pool = initialize_population()
-
-    # out stdout to file
-    # sys.stdout = open('output.txt', 'w')
-    # initialize best tilly genome
-    best_overall_tilly = {"fitness": 0}
-    previous_best = -math.inf
-    best_overall_fitness = -math.inf
-
-    #  begin genetic algorithm
-    for i in range(MAX_GENERATIONS):
+    if __name__ == '__main__':
+        # pre compute possible situations that tilly can be in
+        generate_states()
+        pool = initialize_population()
+        # initialize best tilly genome
+        best_overall_tilly = {"fitness": 0}
+        previous_best = -math.inf
+        best_overall_fitness = -math.inf
+        previous_best_sum = -math.inf
         # keep track of the best generation tilly
-        best_gen_tilly = {}
-        generation_best = -math.inf
-        # test each tilly in a generation
-        for tilly in pool:
-            tilly = evaluate_fitness(tilly)
-            fitness = tilly["fitness"]
+        generation_found_at = 0
+        #  begin genetic algorithm
+        sum_fitness = 0
+        for i in range(MAX_GENERATIONS):
+
+            mp_pool = mp.Pool(mp.cpu_count())
+            # test each tilly in a generation
+
+            tilly = mp_pool.map(evaluate_fitness, pool)
+            mp_pool.close()
+
+            sorted_pool = sorted(tilly, key=lambda i: i["fitness"])
+            potential_best_tilly = sorted_pool[-1]
+            fitness = potential_best_tilly["fitness"]
+
+            # calculate the avg fitness for the current generation
+            raw_fitness = [sub["fitness"] for sub in sorted_pool]
+            sum_fitness = sum(raw_fitness) / POPULATION_SIZE
             # keep track of the best fitness score by any tilly
             if fitness >= previous_best:
                 best_overall_fitness = fitness
                 previous_best = best_overall_fitness
-                best_overall_tilly.update(tilly)
-            # update the best tilly in a generation
-            if fitness >= generation_best:
-                best_gen_tilly.update(tilly)
-                generation_best = fitness
-        # calculate the avg fitness for the current generation
-        raw_fitness = [sub["fitness"] for sub in pool]
-        sum_fitness = sum(raw_fitness) / POPULATION_SIZE
-        #  best fitness value so far
-        print("Current Generation:", i, ", Best Generational Fitness:", best_gen_tilly["fitness"],
-              ", Generation AVG:", sum_fitness, ", Best Fitness yet :", best_overall_fitness)
-        # returned pool is the next generation of tilly's
-        pool = selection(pool)
+                best_overall_tilly.update(potential_best_tilly)
+                generation_found_at = i
 
-    print(best_overall_tilly)
-    # test the best genome against 5000 fountains and output result to file.
-    test_best_tilly(best_overall_tilly)
+            # update the best tilly in a generation
+            generation_best = (sorted_pool[-1]["fitness"])
+
+            #  best fitness value so far
+            print(f'Current Generation: {i}, Best Generational Fitness: {generation_best}, Generation AVG: {sum_fitness}, Best Fitness yet: {best_overall_fitness}, ')
+            # returned pool is the next generation of tilly's
+            pool = selection(sorted_pool)
+
+        print(best_overall_tilly)
+        # test the best genome against 5000 fountains and output result to file.
+        test_best_tilly(best_overall_tilly, generation_found_at)
 
 
 def make_fountain():
@@ -104,16 +110,20 @@ def initialize_population():
 
 
 def evaluate_fitness(current_tilly):
-    # [top left, top right, bottom left, bottom right]
-    current_fountain = make_fountain()
-    tilly_position = random.choice([13, 22, 121, 130])
-    # battery runs out in 200 moves
-    for j in range(200):
-        situation = get_tilly_von_neumann(current_fountain, tilly_position)
-        action = current_tilly[situation]
-        fitness, current_fountain, tilly_position = do_action_for_tilly(action, current_tilly["fitness"],
-                                                                        current_fountain, tilly_position)
-        current_tilly["fitness"] = fitness
+    fit = []
+    for i in range(10):
+        # [top left, top right, bottom left, bottom right]
+        current_fountain = make_fountain()
+        tilly_position = random.choice([13, 22, 121, 130])
+        # battery runs out in 200 moves
+        for j in range(200):
+            situation = get_tilly_von_neumann(current_fountain, tilly_position)
+            action = current_tilly[situation]
+            fitness, current_fountain, tilly_position = do_action_for_tilly(action, current_tilly["fitness"],
+                                                                            current_fountain, tilly_position)
+            fit.append(fitness)
+    fitness_avg = sum(fit)//10
+    current_tilly["fitness"] = fitness_avg
     return current_tilly
 
 def get_tilly_von_neumann(current_fountain, tilly_position):
@@ -171,79 +181,81 @@ def crossover(parent_1, parent_2):
 
 
 def mutate(tilly_to_mutate):
-    # check to mutate
-    # todo take this out and retest as i didnt realise that i check mutation rate twice
-    if MUTATION_RATE < random.randrange(0, 100):
-        # pick a random situation to mutate the action taken in that instance
-        situation_to_mutate = random.randrange(0, len(STATES))
-        tilly_to_mutate[STATES[situation_to_mutate]] = random.randrange(0, 7)
+    # pick a random situation to mutate the action taken in that instance
+    tilly_to_mutate[random.choice(STATES)] = random.randrange(0, 7)
     return tilly_to_mutate
 
 
-def selection(pool):
+def selection(sorted_pool):
     new_pool = []
     #  sort tillys based on fitness increasing to decreasing
-    sorted_pool = sorted(pool, key = lambda i: i["fitness"])
     raw_fitness = [sub["fitness"] for sub in sorted_pool]
     elite_tilly_index = raw_fitness.index(max(raw_fitness))
-    sorted_pool[elite_tilly_index]["fitness"] = 0
-
+    elite_tilly = sorted_pool[elite_tilly_index]
+    elite_tilly["fitness"] = 0
     # create prob dist for roulette style selection
     # fitness is skewed so that there are no negative numbers in the distribution
     skew_factor = abs(min(raw_fitness))
     skewed_fitness = [skew_factor + i for i in raw_fitness]
     sum_fitness = sum(skewed_fitness)
     weight_dist = [i/sum_fitness for i in skewed_fitness]
-
     #  automatically throw the best gene into the next generation
-    new_pool.append(sorted_pool[elite_tilly_index])
+    new_pool.append(elite_tilly)
     #  pick parents to breed from top 15%
     for i in range(POPULATION_SIZE-1):
-
-        # elite style selection, strong live, the weak perish
-        # parent_1 = random.choice(sorted_pool[POPULATION_SIZE - (math.floor(POPULATION_SIZE*.15)):])
-
-        parent_1, parent_2 = random.choices(sorted_pool[(math.floor(POPULATION_SIZE*.85)):],weights=weight_dist[(math.floor(POPULATION_SIZE*.85)):],k=2)
-
-        # equal selection rate
-        # parent_2 = weighted_choice(sorted_pool)
-
-        # roulette selection for parent 2
-        # parent_2 = weighted_choice(sorted_pool, weight_dist)
-
+        parent_1, parent_2 = random.choices(sorted_pool[(math.floor(POPULATION_SIZE*.85)):],
+                                            weights=weight_dist[(math.floor(POPULATION_SIZE*.85)):], k=2)
         child = crossover(parent_1, parent_2)
         #decide if you want to mutate
-        if (MUTATION_RATE > random.randrange(0,100)):
+        if MUTATION_RATE > random.randrange(0,100):
             child = mutate(child)
         new_pool.append(child)
 
     return new_pool
 
 
-def test_best_tilly(tilly):
+def test_best_tilly(tilly,generation_found_at):
     score = []
-    count = {}
-# sys.stdout = open('bestTillyTesting.txt', 'w')
-    # for i in range(500):
-    print("NOW TESTING SOLUTION AGAINST 5000 RANDOM FOUNTAINS...")
-    for i in range(5000):
+    for i in range(1000):
         tilly["fitness"] = 0
         score.append(evaluate_fitness(tilly)["fitness"])
     score.sort()
-        # for i in score:
-        #     count[i] = score.count(i)
-        # print("avg score during test:", sum(score)/len(score))
-        # count_sort = sorted(count.items(), key=operator.itemgetter(1))
-        # print("number of times score achieved(SCORE ACHIEVED, # OF TIMES ACHIEVED):\n", count_sort)
-        # print("unsorted count:\n", count)
-        # print("-----------------------------------------------------------------------------------------------------------------"
-        #       "-----------------------------------------------------------------------------------------------------------------"
-        #       "-----------------------------------------------------------------------------------------------------------------")
-        # count.clear()
-        # score.clear()
-    sys.stdout = open(('average_score' + str(sum(score)/len(score)) + 'num_generations'+ str(MAX_GENERATIONS) +'.txt'), 'w')
+    print(sum(score)/1000)
     del tilly["fitness"]
     print(tilly)
+    sys.stdout = open(f'average_score {str(sum(score)/len(score))} num_generations {str(generation_found_at)} .txt', 'w')
+    print(tilly)
+
+# def test_best_tilly(tilly):
+#     score = []
+#     count = {}
+# # sys.stdout = open('bestTillyTesting.txt', 'w')
+#     # for i in range(500):
+#     print("NOW TESTING SOLUTION AGAINST 5000 RANDOM FOUNTAINS...")
+#     for i in range(100):
+#         tilly["fitness"] = 0
+#         score.append(evaluate_fitness(tilly)["fitness"])
+#     score.sort()
+#         # for i in score:
+#         #     count[i] = score.count(i)
+#         # print("avg score during test:", sum(score)/len(score))
+#         # count_sort = sorted(count.items(), key=operator.itemgetter(1))
+#         # print("number of times score achieved(SCORE ACHIEVED, # OF TIMES ACHIEVED):\n", count_sort)
+#         # print("unsorted count:\n", count)
+#         # print("-----------------------------------------------------------------------------------------------------------------"
+#         #       "-----------------------------------------------------------------------------------------------------------------"
+#         #       "-----------------------------------------------------------------------------------------------------------------")
+#         # count.clear()
+#         # score.clear()
+#     print(score, tilly)
+#     sys.stdout = open(('average_score' + str(sum(score)/len(score)) + 'num_generations'+ str(MAX_GENERATIONS) +'.txt'), 'w')
+#     del tilly["fitness"]
+#     print(tilly)
+#
+
+
+#test_best_tilly({11111: 3, 11112: 2, 11113: 1, 11121: 4, 11122: 2, 11123: 4, 11131: 2, 11132: 2, 11133: 4, 11211: 3, 11212: 2, 11213: 1, 11221: 3, 11222: 5, 11223: 3, 11231: 3, 11232: 2, 11233: 1, 11311: 2, 11312: 2, 11313: 1, 11321: 4, 11322: 4, 11323: 4, 11331: 2, 11332: 2, 12111: 1, 12112: 1, 12113: 1, 12121: 1, 12122: 1, 12123: 4, 12131: 1, 12132: 5, 12133: 6, 12211: 1, 12212: 5, 12213: 1, 12221: 1, 12222: 1, 12223: 4, 12231: 1, 12232: 2, 12233: 5, 12311: 1, 12312: 1, 12313: 1, 12321: 0, 12322: 5, 12323: 1, 12331: 2, 12332: 2, 13111: 4, 13112: 4, 13113: 4, 13121: 4, 13122: 1, 13123: 4, 13131: 3, 13132: 3, 13211: 3, 13212: 5, 13213: 3, 13221: 4, 13222: 1, 13223: 3, 13231: 3, 13232: 3, 13311: 6, 13312: 2, 13321: 5, 13322: 5, 21111: 6, 21112: 6, 21113: 6, 21121: 6, 21122: 2, 21123: 6, 21131: 6, 21132: 6, 21133: 6, 21211: 6, 21212: 3, 21213: 6, 21221: 6, 21222: 3, 21223: 6, 21231: 6, 21232: 2, 21233: 1, 21311: 6, 21312: 6, 21313: 6, 21321: 4, 21322: 4, 21323: 6, 21331: 6, 21332: 6, 22111: 6, 22112: 6, 22113: 6, 22121: 6, 22122: 6, 22123: 6, 22131: 6, 22132: 6, 22133: 1, 22211: 3, 22212: 3, 22213: 6, 22221: 6, 22222: 3, 22223: 6, 22231: 6, 22232: 3, 22233: 4, 22311: 6, 22312: 6, 22313: 6, 22321: 4, 22322: 4, 22323: 6, 22331: 6, 22332: 6, 23111: 6, 23112: 2, 23113: 6, 23121: 6, 23122: 2, 23123: 6, 23131: 6, 23132: 2, 23211: 6, 23212: 2, 23213: 6, 23221: 6, 23222: 2, 23223: 6, 23231: 6, 23232: 6, 23311: 3, 23312: 5, 23321: 5, 23322: 4, 31111: 1, 31112: 0, 31113: 3, 31121: 3, 31122: 1, 31123: 0, 31131: 1, 31132: 1, 31211: 0, 31212: 2, 31213: 1, 31221: 4, 31222: 3, 31223: 1, 31231: 5, 31232: 3, 31311: 2, 31312: 5, 31321: 0, 31322: 2, 32111: 5, 32112: 0, 32113: 5, 32121: 1, 32122: 3, 32123: 4, 32131: 5, 32132: 3, 32211: 5, 32212: 3, 32213: 1, 32221: 5, 32222: 6, 32223: 3, 32231: 5, 32232: 1, 32311: 0, 32312: 6, 32321: 5, 32322: 6, 33111: 1, 33112: 5, 33121: 0, 33122: 6, 33211: 6, 33212: 4, 33221: 4, 33222: 5},0)
+
 
 # 1000 generations
 # test_best_tilly({'fitness': 720, 11111: 1, 11112: 2, 11113: 4, 11121: 4, 11122: 2, 11123: 4, 11131: 3, 11132: 2, 11133: 4, 11211: 3, 11212: 3, 11213: 3, 11221: 3, 11222: 1, 11223: 4, 11231: 3, 11232: 3, 11233: 5, 11311: 2, 11312: 2, 11313: 1, 11321: 1, 11322: 4, 11323: 1, 11331: 2, 11332: 2, 12111: 1, 12112: 2, 12113: 1, 12121: 1, 12122: 1, 12123: 1, 12131: 2, 12132: 2, 12133: 4, 12211: 3, 12212: 2, 12213: 1, 12221: 4, 12222: 4, 12223: 5, 12231: 3, 12232: 5, 12233: 0, 12311: 1, 12312: 2, 12313: 1, 12321: 4, 12322: 2, 12323: 1, 12331: 1, 12332: 5, 13111: 4, 13112: 2, 13113: 4, 13121: 4, 13122: 4, 13123: 4, 13131: 3, 13132: 2, 13211: 3, 13212: 2, 13213: 3, 13221: 3, 13222: 3, 13223: 3, 13231: 3, 13232: 2, 13311: 1, 13312: 6, 13321: 3, 13322: 1, 21111: 6, 21112: 6, 21113: 6, 21121: 6, 21122: 6, 21123: 6, 21131: 6, 21132: 6, 21133: 6, 21211: 6, 21212: 6, 21213: 6, 21221: 6, 21222: 2, 21223: 6, 21231: 6, 21232: 2, 21233: 4, 21311: 6, 21312: 6, 21313: 6, 21321: 6, 21322: 4, 21323: 6, 21331: 6, 21332: 6, 22111: 6, 22112: 2, 22113: 6, 22121: 6, 22122: 5, 22123: 6, 22131: 6, 22132: 2, 22133: 2, 22211: 6, 22212: 1, 22213: 5, 22221: 1, 22222: 6, 22223: 5, 22231: 6, 22232: 3, 22233: 5, 22311: 6, 22312: 6, 22313: 6, 22321: 1, 22322: 6, 22323: 6, 22331: 1, 22332: 6, 23111: 6, 23112: 6, 23113: 6, 23121: 6, 23122: 6, 23123: 6, 23131: 6, 23132: 6, 23211: 6, 23212: 6, 23213: 6, 23221: 6, 23222: 6, 23223: 4, 23231: 6, 23232: 6, 23311: 6, 23312: 0, 23321: 6, 23322: 0, 31111: 3, 31112: 2, 31113: 1, 31121: 3, 31122: 4, 31123: 0, 31131: 0, 31132: 1, 31211: 2, 31212: 2, 31213: 0, 31221: 3, 31222: 3, 31223: 6, 31231: 0, 31232: 0, 31311: 6, 31312: 0, 31321: 6, 31322: 5, 32111: 3, 32112: 5, 32113: 3, 32121: 6, 32122: 4, 32123: 1, 32131: 3, 32132: 6, 32211: 1, 32212: 6, 32213: 1, 32221: 0, 32222: 4, 32223: 5, 32231: 0, 32232: 3, 32311: 2, 32312: 1, 32321: 0, 32322: 5, 33111: 2, 33112: 1, 33121: 5, 33122: 5, 33211: 1, 33212: 1, 33221: 0, 33222: 4}
